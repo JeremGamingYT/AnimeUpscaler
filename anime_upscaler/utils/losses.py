@@ -99,3 +99,17 @@ class AntiHaloLoss(nn.Module):
         detail = luma - blur
         loss = (detail.abs() * edge_mask).mean()
         return loss
+
+
+class TotalVariationLoss(nn.Module):
+    """Simple total variation loss on all RGB channels.
+
+    Helps suppress isolated pixel noise and small artifacts by encouraging
+    spatial smoothness.  Applied with a very small weight so that edges are
+    preserved while minor irregularities are reduced.
+    """
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        dx = x[:, :, :, 1:] - x[:, :, :, :-1]
+        dy = x[:, :, 1:, :] - x[:, :, :-1, :]
+        return dx.abs().mean() + dy.abs().mean()

@@ -34,6 +34,7 @@ loss:
   antihalo_weight: 0.03
   antihalo_edge_thr: 0.05
   antihalo_blur: 5
+  tv_weight: 0.01
   use_gan: true
   gan_weight: 0.0015
   r1_gamma: 10.0
