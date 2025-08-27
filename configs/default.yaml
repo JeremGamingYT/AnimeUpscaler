@@ -38,7 +38,7 @@ loss:
   use_gan: true
   gan_weight: 0.003
   r1_gamma: 10.0
-  gan_warmup_steps: 2000
+  gan_warmup_steps: 1000
 
 data:
   hr_dir: data/commons/images
