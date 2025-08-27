@@ -282,11 +282,18 @@ def main(cfg: TrainConfig | None = None) -> None:
                     base_up_m = F.interpolate(lr.detach(), scale_factor=int(conf["scale"]), mode="bicubic", align_corners=False)
                     pb = psnr(base_up_m, hr)
                     sb = ssim(base_up_m, hr)
+                    # MAE vs bicubic (en % d'amélioration): (MAE_bic - MAE_model) / MAE_bic * 100
+                    mae_model = (sr.detach() - hr).abs().mean()
+                    mae_bic = (base_up_m - hr).abs().mean()
+                    mae_improve = ((mae_bic - mae_model) / (mae_bic + 1e-8) * 100.0).item()
                 writer.add_scalar("loss/train", loss.item(), step)
                 writer.add_scalar("metrics/psnr", p.item(), step)
                 writer.add_scalar("metrics/ssim", s.item(), step)
                 writer.add_scalar("metrics_bicubic/psnr", pb.item(), step)
                 writer.add_scalar("metrics_bicubic/ssim", sb.item(), step)
+                writer.add_scalar("metrics/mae_model", mae_model.item(), step)
+                writer.add_scalar("metrics_bicubic/mae", mae_bic.item(), step)
+                writer.add_scalar("metrics/mae_improve_percent", mae_improve, step)
                 perf_steps.append(step)
                 perf_psnr_list.append(float(p.item()))
                 perf_ssim_list.append(float(s.item()))
@@ -295,7 +302,7 @@ def main(cfg: TrainConfig | None = None) -> None:
                 try:
                     mem_mb = torch.cuda.memory_allocated(0) / (1024 ** 2)
                     lr_now = scheduler.get_last_lr()[0]
-                    print(f"step {step}/{total_steps} | loss {loss.item():.4f} | PSNR {p.item():.2f} | mem {mem_mb:.0f} MB | lr {lr_now:.2e}", flush=True)
+                    print(f"step {step}/{total_steps} | loss {loss.item():.4f} | PSNR {p.item():.2f} | MAE vs bicubic: {mae_improve:.3f}% | mem {mem_mb:.0f} MB | lr {lr_now:.2e}", flush=True)
                 except Exception:
                     pass
 
