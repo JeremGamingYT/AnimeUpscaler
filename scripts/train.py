@@ -21,7 +21,7 @@ from anime_upscaler.data.dataset import AnimeSRDataset, AnimeSRTileDataset, list
 from anime_upscaler.utils.metrics import psnr, ssim
 from anime_upscaler.utils.ema import EMA
 from anime_upscaler.utils.perceptual import LPIPSLike
-from anime_upscaler.utils.losses import AntiBandingLoss, ChromaTVLoss, AntiHaloLoss
+from anime_upscaler.utils.losses import AntiBandingLoss, ChromaTVLoss, AntiHaloLoss, TotalVariationLoss
 from anime_upscaler.utils.tiling import upscale_tensor_tiled
 from anime_upscaler.utils.ckpt import load_model_from_checkpoint, find_latest_checkpoint
 
@@ -192,6 +192,7 @@ def main(cfg: TrainConfig | None = None) -> None:
     chroma_tv = ChromaTVLoss()
     anti_halo = AntiHaloLoss(edge_threshold=float(conf["loss"].get("antihalo_edge_thr", 0.05)),
                              blur_kernel=int(conf["loss"].get("antihalo_blur", 5)))
+    tv_loss_fn = TotalVariationLoss()
     # Prepare one eval HR path for full-image validation
     eval_hr_path = None
     try:
@@ -225,11 +226,12 @@ def main(cfg: TrainConfig | None = None) -> None:
                 ab_loss = antiband(sr) * float(conf["loss"].get("antibanding_weight", 0.0))
                 ctv_loss = chroma_tv(sr) * float(conf["loss"].get("chroma_tv_weight", 0.0))
                 ah_loss = anti_halo(sr) * float(conf["loss"].get("antihalo_weight", 0.0))
+                tv_loss = tv_loss_fn(sr) * float(conf["loss"].get("tv_weight", 0.0))
                 # Bicubic baseline upsample for reference chroma
                 with torch.no_grad():
                     base_up = F.interpolate(lr, scale_factor=int(conf["scale"]), mode="bicubic", align_corners=False)
                 chroma_keep = chroma_preservation_loss(sr, base_up) * float(conf["loss"].get("chroma_keep_weight", 0.0))
-                loss = base + e_loss + p_loss + ab_loss + ctv_loss + ah_loss + chroma_keep
+                loss = base + e_loss + p_loss + ab_loss + ctv_loss + ah_loss + chroma_keep + tv_loss
 
             if use_gan and step >= conf["loss"].get("gan_warmup_steps", 0):
                 # Discriminator update (R1 regularization)
