@@ -16,6 +16,10 @@ class LPIPSLike(nn.Module):
 		try:
 			import lpips  # type: ignore
 			self.lpips = lpips.LPIPS(net='vgg')
+			# Use LPIPS as a fixed feature metric on eval device
+			self.lpips.eval()
+			for p in self.lpips.parameters():
+				p.requires_grad_(False)
 			self.enabled = True
 		except Exception:
 			self.enabled = False
@@ -35,7 +39,9 @@ class LPIPSLike(nn.Module):
 			# expects [-1,1]
 			xn = x * 2 - 1
 			yn = y * 2 - 1
-			return self.lpips(xn, yn).mean()
+			# Ensure LPIPS and buffers are on the same device as inputs and run in fp32
+			lp = self.lpips.to(device=x.device)
+			return lp(xn.to(dtype=torch.float32), yn.to(dtype=torch.float32)).mean()
 		# Deterministic non-zero fallback perceptual distance in a fixed feature space
 		assert self.fallback is not None
 		fx = self.fallback.to(device=x.device, dtype=x.dtype)(x)

@@ -16,7 +16,8 @@ def upscale_tensor_tiled(model: torch.nn.Module, lr: torch.Tensor, scale: int, t
     assert lr.dim() == 4 and lr.size(0) == 1
     _, _, h, w = lr.shape
     rh, rw = h * scale, w * scale
-    out = torch.zeros((1, 3, rh, rw), device=device)
+    d = lr.dtype
+    out = torch.zeros((1, 3, rh, rw), device=device, dtype=d)
     weight = torch.zeros_like(out[:, :1])
 
     stride = tile_size - tile_overlap
@@ -42,12 +43,12 @@ def upscale_tensor_tiled(model: torch.nn.Module, lr: torch.Tensor, scale: int, t
             oy1, ox1 = oy0 + sy1, ox0 + sx1
 
             # Feathering mask to reduce seams
-            wy = torch.ones((sy1,), device=device)
-            wx = torch.ones((sx1,), device=device)
+            wy = torch.ones((sy1,), device=device, dtype=d)
+            wx = torch.ones((sx1,), device=device, dtype=d)
             edge = tile_overlap * scale
             if edge > 0:
-                rampy = torch.linspace(0, 1, steps=min(edge, sy1), device=device)
-                rampx = torch.linspace(0, 1, steps=min(edge, sx1), device=device)
+                rampy = torch.linspace(0, 1, steps=min(edge, sy1), device=device, dtype=d)
+                rampx = torch.linspace(0, 1, steps=min(edge, sx1), device=device, dtype=d)
                 wy[: rampy.numel()] = rampy
                 wy[-rampy.numel() :] = rampy.flip(0)
                 wx[: rampx.numel()] = rampx
@@ -72,8 +73,12 @@ def edge_aware_sharpen(x: torch.Tensor, amount: float = 0.3, radius: int = 1, th
     # Gaussian approx by box blur (fast) using avgpool
     k = max(1, int(radius))
     if k > 1:
-        pad = (k // 2, k // 2, k // 2, k // 2)
-        x_pad = F.pad(x, (pad[0], pad[1], pad[2], pad[3]), mode="reflect")
+        # SAME output size padding for pooling. For even k, need asymmetric padding.
+        p_left = k // 2
+        p_right = k // 2 - (1 if (k % 2 == 0) else 0)
+        p_top = k // 2
+        p_bottom = k // 2 - (1 if (k % 2 == 0) else 0)
+        x_pad = F.pad(x, (p_left, p_right, p_top, p_bottom), mode="reflect")
         blur = F.avg_pool2d(x_pad, kernel_size=k, stride=1)
     else:
         blur = x
@@ -118,6 +123,106 @@ def upscale_tensor_tiled_tta(model: torch.nn.Module, lr: torch.Tensor, scale: in
     for fwd, inv in T:
         lr_t = fwd(lr)
         sr_t = upscale_tensor_tiled(model, lr_t, scale=scale, tile_size=tile_size, tile_overlap=tile_overlap, device=device)
+        sr_t = inv(sr_t)
+        acc = sr_t if acc is None else acc + sr_t
+    out = acc / float(len(T))
+    return out
+
+
+@torch.no_grad()
+def upscale_tensor_tiled_autoscale(
+    model: torch.nn.Module,
+    lr: torch.Tensor,
+    scale: int,
+    tile_size: int,
+    min_tile: int,
+    tile_overlap: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """OOM-resilient tiled upscale that reduces tile size until it fits.
+
+    Tries the provided tile_size first, then halves progressively down to min_tile on CUDA OOM.
+    """
+    import torch as _torch
+
+    current_tile = int(tile_size)
+    last_error: Exception | None = None
+    while current_tile >= int(min_tile):
+        try:
+            return upscale_tensor_tiled(
+                model=model,
+                lr=lr,
+                scale=scale,
+                tile_size=current_tile,
+                tile_overlap=tile_overlap,
+                device=device,
+            )
+        except RuntimeError as e:
+            msg = str(e)
+            if ("out of memory" in msg.lower()) or ("CUBLAS_STATUS_ALLOC_FAILED" in msg):
+                last_error = e
+                try:
+                    _torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                next_tile = max(int(min_tile), current_tile // 2)
+                if next_tile == current_tile:
+                    break
+                current_tile = next_tile
+                continue
+            raise
+    if last_error is not None:
+        raise last_error
+    # Fallback should never reach here, but return a direct call as last resort
+    return upscale_tensor_tiled(model, lr, scale, max(int(min_tile), 32), tile_overlap, device)
+
+
+@torch.no_grad()
+def upscale_tensor_tiled_tta_autoscale(
+    model: torch.nn.Module,
+    lr: torch.Tensor,
+    scale: int,
+    tile_size: int,
+    min_tile: int,
+    tile_overlap: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """x8 TTA with OOM-resilient auto-tiling per transform."""
+    def t_identity(x: torch.Tensor) -> torch.Tensor:
+        return x
+
+    def t_hflip(x: torch.Tensor) -> torch.Tensor:
+        return torch.flip(x, dims=[-1])
+
+    def t_vflip(x: torch.Tensor) -> torch.Tensor:
+        return torch.flip(x, dims=[-2])
+
+    def t_transpose(x: torch.Tensor) -> torch.Tensor:
+        return x.transpose(-1, -2)
+
+    T = [
+        (t_identity, t_identity),
+        (t_hflip, t_hflip),
+        (t_vflip, t_vflip),
+        (lambda x: t_hflip(t_vflip(x)), lambda y: t_hflip(t_vflip(y))),
+        (t_transpose, t_transpose),
+        (lambda x: t_hflip(t_transpose(x)), lambda y: t_transpose(t_hflip(y))),
+        (lambda x: t_vflip(t_transpose(x)), lambda y: t_transpose(t_vflip(y))),
+        (lambda x: t_hflip(t_vflip(t_transpose(x))), lambda y: t_transpose(t_vflip(t_hflip(y)))),
+    ]
+
+    acc = None
+    for fwd, inv in T:
+        lr_t = fwd(lr)
+        sr_t = upscale_tensor_tiled_autoscale(
+            model=model,
+            lr=lr_t,
+            scale=scale,
+            tile_size=tile_size,
+            min_tile=min_tile,
+            tile_overlap=tile_overlap,
+            device=device,
+        )
         sr_t = inv(sr_t)
         acc = sr_t if acc is None else acc + sr_t
     out = acc / float(len(T))

@@ -36,45 +36,77 @@ def random_crop_pair(hr: Image.Image, scale: int, crop_size: int) -> Tuple[Image
 
 
 def degrade(lr_img: Image.Image, jpeg_q_range=(60, 95), noise_sigma_range=(0.0, 4.0), blur_kernel=7, blur_sigma_range=(0.2, 2.0)) -> Image.Image:
-    # Apply blur (random isotropic or anisotropic approximation)
+    """Heavier, more realistic degradation pipeline (inspired by RealESRGAN).
+
+    Includes: random blur (iso/anisotropic), color/saturation jitter, gamma,
+    mixed downscale kernels, noise (Gaussian + Poisson), JPEG w/ subsampling,
+    occasional additional resample + recompress to simulate transcodes.
+    """
+    from PIL import ImageEnhance, ImageFilter
+    # 1) Blur
     if blur_kernel > 1:
-        from PIL import ImageFilter
         sigma = random.uniform(*blur_sigma_range)
         if random.random() < 0.5:
             lr_img = lr_img.filter(ImageFilter.GaussianBlur(radius=sigma))
         else:
-            # Approximate anisotropic by sequential directional blurs
-            lr_img = lr_img.filter(ImageFilter.GaussianBlur(radius=sigma * 0.5))
-            lr_img = lr_img.filter(ImageFilter.BoxBlur(radius=max(0.1, sigma * 0.3)))
-    # Add noise
-    sigma_noise = random.uniform(*noise_sigma_range)
-    if sigma_noise > 0:
-        arr = np.array(lr_img).astype(np.float32)
-        noise_g = np.random.normal(0, sigma_noise, arr.shape).astype(np.float32)
-        # Poisson-like noise
-        scale = max(1.0, 30.0 / 255.0)
-        noise_p = np.random.poisson(arr * scale) / scale - arr
-        noise = noise_g + 0.3 * noise_p
-        arr = np.clip(arr + noise, 0, 255).astype(np.uint8)
-        lr_img = Image.fromarray(arr)
-    # Downscale (non-bicubic) then JPEG to simulate real degradations
+            # approximate anisotropic via sequential directional/box blurs
+            lr_img = lr_img.filter(ImageFilter.GaussianBlur(radius=max(0.1, sigma * 0.35)))
+            lr_img = lr_img.filter(ImageFilter.BoxBlur(radius=max(0.1, sigma * 0.25)))
+    # 2) Color jitter (mild)
     if random.random() < 0.7:
+        enh = ImageEnhance.Color(lr_img)
+        lr_img = enh.enhance(random.uniform(0.9, 1.1))
+        enh = ImageEnhance.Brightness(lr_img)
+        lr_img = enh.enhance(random.uniform(0.95, 1.05))
+        enh = ImageEnhance.Contrast(lr_img)
+        lr_img = enh.enhance(random.uniform(0.95, 1.05))
+    # 3) Gamma (mild)
+    if random.random() < 0.5:
+        gamma = random.uniform(0.9, 1.1)
+        arr = np.array(lr_img).astype(np.float32) / 255.0
+        arr = np.clip(arr ** gamma, 0.0, 1.0)
+        lr_img = Image.fromarray((arr * 255.0).astype(np.uint8))
+    # 4) Mixed downscale/upsample
+    if random.random() < 0.8:
         w, h = lr_img.size
-        scale = random.choice([0.5, 0.75])
-        ds = lr_img.resize((max(1, int(w * scale)), max(1, int(h * scale))), random.choice([Image.BILINEAR, Image.NEAREST]))
-        lr_img = ds.resize((w, h), random.choice([Image.BILINEAR, Image.NEAREST]))
-
-    # JPEG compression with randomized chroma subsampling via PIL internal
+        k = random.choice([0.5, 0.6, 0.7, 0.75, 0.85])
+        ds_w, ds_h = max(1, int(w * k)), max(1, int(h * k))
+        down_method = random.choice([Image.BILINEAR, Image.NEAREST, Image.BOX])
+        up_method = random.choice([Image.BILINEAR, Image.NEAREST, Image.BICUBIC])
+        lr_img = lr_img.resize((ds_w, ds_h), down_method).resize((w, h), up_method)
+    # 5) Noise
+    sigma_noise = random.uniform(*noise_sigma_range)
+    if sigma_noise > 0 or random.random() < 0.3:
+        arr = np.array(lr_img).astype(np.float32)
+        if sigma_noise > 0:
+            noise_g = np.random.normal(0, sigma_noise, arr.shape).astype(np.float32)
+            arr += noise_g
+        if random.random() < 0.5:
+            scale = max(1.0, 30.0 / 255.0)
+            noise_p = np.random.poisson(np.clip(arr, 0, 255) * scale) / scale - arr
+            arr += 0.3 * noise_p
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+        lr_img = Image.fromarray(arr)
+    # 6) JPEG compression
     q = random.randint(*jpeg_q_range)
     from io import BytesIO
     buff = BytesIO()
     lr_img.save(buff, format="JPEG", quality=q, subsampling=random.choice([0, 1, 2]))
     buff.seek(0)
     lr_img = Image.open(buff).convert("RGB")
-
-    # Light banding/ringing approximation by slight posterization/dither
+    # 7) Optional extra resample + recompress (transcode simulation)
+    if random.random() < 0.25:
+        w, h = lr_img.size
+        s = random.uniform(0.9, 1.1)
+        tw, th = max(1, int(w * s)), max(1, int(h * s))
+        lr_img = lr_img.resize((tw, th), random.choice([Image.BILINEAR, Image.BICUBIC])).resize((w, h), Image.BICUBIC)
+        buff2 = BytesIO()
+        lr_img.save(buff2, format="JPEG", quality=max(50, int(q * random.uniform(0.85, 1.0))), subsampling=random.choice([0, 1, 2]))
+        buff2.seek(0)
+        lr_img = Image.open(buff2).convert("RGB")
+    # 8) Light banding/posterization occasionally
     if random.random() < 0.3:
-        lr_img = lr_img.convert("P", palette=Image.ADAPTIVE, colors=random.choice([128, 192, 224])).convert("RGB")
+        lr_img = lr_img.convert("P", palette=Image.ADAPTIVE, colors=random.choice([128, 160, 192, 224])).convert("RGB")
     return lr_img
 
 

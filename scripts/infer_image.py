@@ -9,7 +9,13 @@ from rich.console import Console
 
 from anime_upscaler.models.laesr import LAESR
 from anime_upscaler.utils.ckpt import find_latest_checkpoint, load_model_from_checkpoint
-from anime_upscaler.utils.tiling import upscale_tensor_tiled, edge_aware_sharpen, upscale_tensor_tiled_tta
+from anime_upscaler.utils.tiling import (
+    upscale_tensor_tiled,
+    edge_aware_sharpen,
+    upscale_tensor_tiled_tta,
+    upscale_tensor_tiled_autoscale,
+    upscale_tensor_tiled_tta_autoscale,
+)
 import torch.nn.functional as F
 
 
@@ -57,6 +63,8 @@ def main() -> None:
 
     tile = conf["infer"]["tile_size"]
     overlap = conf["infer"]["tile_overlap"]
+    autotile = bool(conf["infer"].get("autotile", True))
+    min_tile = int(conf["infer"].get("min_tile", max(64, tile // 4)))
     scale = conf["scale"]
     use_half = conf["infer"].get("half_precision", True)
 
@@ -70,9 +78,15 @@ def main() -> None:
                 lr = lr.half()
             use_tta = bool(conf["infer"].get("tta", False))
             if use_tta:
-                sr = upscale_tensor_tiled_tta(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
+                if autotile:
+                    sr = upscale_tensor_tiled_tta_autoscale(model, lr, scale=scale, tile_size=tile, min_tile=min_tile, tile_overlap=overlap, device=device)
+                else:
+                    sr = upscale_tensor_tiled_tta(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
             else:
-                sr = upscale_tensor_tiled(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
+                if autotile:
+                    sr = upscale_tensor_tiled_autoscale(model, lr, scale=scale, tile_size=tile, min_tile=min_tile, tile_overlap=overlap, device=device)
+                else:
+                    sr = upscale_tensor_tiled(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
             # Optional chroma preserve from bicubic baseline to avoid color shifts
             if bool(conf["infer"].get("preserve_chroma", True)):
                 base_up = F.interpolate(lr, scale_factor=scale, mode="bicubic", align_corners=False)
