@@ -12,3 +12,6 @@ lpips>=0.1.4
 torchvision>=0.16.0
 # You must install torch/torchvision separately for your CUDA version on Windows.
 
+# For simple end-of-training performance graph
+matplotlib>=3.7.0
+

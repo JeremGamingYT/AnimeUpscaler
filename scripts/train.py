@@ -20,8 +20,9 @@ from anime_upscaler.data.dataset import AnimeSRDataset, AnimeSRTileDataset, list
 from anime_upscaler.utils.metrics import psnr, ssim
 from anime_upscaler.utils.ema import EMA
 from anime_upscaler.utils.perceptual import LPIPSLike
-from anime_upscaler.utils.losses import AntiBandingLoss
+from anime_upscaler.utils.losses import AntiBandingLoss, ChromaTVLoss, AntiHaloLoss
 from anime_upscaler.utils.tiling import upscale_tensor_tiled
+from anime_upscaler.utils.ckpt import load_model_from_checkpoint, find_latest_checkpoint
 
 
 @dataclass
@@ -36,6 +37,12 @@ def load_config(path: str) -> Dict[str, Any]:
 
 def charbonnier_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-3) -> torch.Tensor:
     return torch.sqrt((x - y) ** 2 + eps * eps).mean()
+
+
+def quality_score(psnr_val: float, ssim_val: float) -> float:
+    # Normalize PSNR roughly to [0,1] for 20–40 dB range
+    psnr_n = max(0.0, min(1.0, (psnr_val - 20.0) / 20.0))
+    return 0.5 * (psnr_n + float(ssim_val))
 
 
 def main(cfg: TrainConfig | None = None) -> None:
@@ -80,6 +87,18 @@ def main(cfg: TrainConfig | None = None) -> None:
         print(f"[GPU] {gpu_name} | CUDA {torch.version.cuda} | Torch {torch.__version__} | VRAM {total_mem_gb:.1f} GB", flush=True)
     except Exception:
         print("[GPU] Impossible de lire les informations GPU, mais CUDA est activé.", flush=True)
+
+    # Optional resume from checkpoint
+    resume_from = conf.get("train", {}).get("resume_from", None)
+    resume_latest = bool(conf.get("train", {}).get("resume_latest", False))
+    if isinstance(resume_from, str) and len(resume_from) > 0 and os.path.isfile(resume_from):
+        obj = load_model_from_checkpoint(model, resume_from, device)
+        print(f"[RESUME] Modèle initialisé depuis: {resume_from}")
+    elif resume_latest:
+        latest = find_latest_checkpoint(ckpt_dir)
+        if latest:
+            obj = load_model_from_checkpoint(model, latest, device)
+            print(f"[RESUME] Modèle initialisé depuis dernier checkpoint: {latest}")
 
     # Resolve training HR directory with fallback to commons images
     hr_dir = conf["data"]["hr_dir"]
@@ -141,8 +160,15 @@ def main(cfg: TrainConfig | None = None) -> None:
     ema = EMA(model, decay=conf["train"]["ema_decay"]) if conf["train"].get("ema", True) else None
 
     writer = SummaryWriter(log_dir=logs_dir)
+    # Track simple in-training performance history for a final graph
+    perf_steps: list[int] = []
+    perf_psnr_list: list[float] = []
+    perf_ssim_list: list[float] = []
     perc_loss = LPIPSLike()
     antiband = AntiBandingLoss(grad_threshold=float(conf["loss"].get("antibanding_grad_thr", 0.02)))
+    chroma_tv = ChromaTVLoss()
+    anti_halo = AntiHaloLoss(edge_threshold=float(conf["loss"].get("antihalo_edge_thr", 0.05)),
+                             blur_kernel=int(conf["loss"].get("antihalo_blur", 5)))
     # Prepare one eval HR path for full-image validation
     eval_hr_path = None
     try:
@@ -174,7 +200,9 @@ def main(cfg: TrainConfig | None = None) -> None:
                 e_loss = charbonnier_loss(edges(sr), edges(hr)) * conf["loss"]["edge_weight"]
                 p_loss = perc_loss(sr, hr) * conf["loss"].get("perceptual_weight", 0.0)
                 ab_loss = antiband(sr) * float(conf["loss"].get("antibanding_weight", 0.0))
-                loss = base + e_loss + p_loss + ab_loss
+                ctv_loss = chroma_tv(sr) * float(conf["loss"].get("chroma_tv_weight", 0.0))
+                ah_loss = anti_halo(sr) * float(conf["loss"].get("antihalo_weight", 0.0))
+                loss = base + e_loss + p_loss + ab_loss + ctv_loss + ah_loss
 
             if use_gan and step >= conf["loss"].get("gan_warmup_steps", 0):
                 # Discriminator update (R1 regularization)
@@ -224,6 +252,9 @@ def main(cfg: TrainConfig | None = None) -> None:
                 writer.add_scalar("loss/train", loss.item(), step)
                 writer.add_scalar("metrics/psnr", p.item(), step)
                 writer.add_scalar("metrics/ssim", s.item(), step)
+                perf_steps.append(step)
+                perf_psnr_list.append(float(p.item()))
+                perf_ssim_list.append(float(s.item()))
                 if use_gan and gan_d_val is not None:
                     writer.add_scalar("loss/gan_d", gan_d_val, step)
                 try:
@@ -349,6 +380,65 @@ def main(cfg: TrainConfig | None = None) -> None:
             print(f"[SAMPLE] Exporté: {sample_path}", flush=True)
     except Exception as e:
         print(f"[SAMPLE] Échec de l'export d'exemple: {e}", flush=True)
+
+    # Simple end-of-training graph: performance over steps
+    try:
+        import json
+        import matplotlib.pyplot as plt
+        # Read TensorBoard scalars is non-trivial; instead, infer from saved logs is complex.
+        # For simplicity, we create a tiny CSV of last N evaluations during training could be stored.
+        # If not available, we at least create a placeholder with final PSNR/SSIM measured just now on eval_hr_path.
+        perf_png = os.path.join(samples_dir, "training_performance.png")
+        # If we have history, plot it
+        if len(perf_steps) > 0:
+            qs = [quality_score(p, s) for p, s in zip(perf_psnr_list, perf_ssim_list)]
+            plt.figure(figsize=(7, 4))
+            plt.plot(perf_steps, qs, label="Qualité", color="#f28e2b")
+            plt.plot(perf_steps, perf_psnr_list, label="PSNR(dB)", color="#4e79a7", alpha=0.6)
+            plt.plot(perf_steps, perf_ssim_list, label="SSIM", color="#59a14f", alpha=0.6)
+            plt.xlabel("Steps")
+            plt.ylabel("Score")
+            plt.title("Performance pendant l'entraînement")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(perf_png)
+            print(f"[GRAPH] Enregistré: {perf_png}")
+            plt.close()
+            return
+        # Compute final full-image metrics if eval_hr_path exists
+        if eval_hr_path is not None:
+            from PIL import Image as _Image
+            model.eval()
+            hr_img = _Image.open(eval_hr_path).convert("RGB")
+            w, h = hr_img.size
+            sc = int(conf["scale"])
+            lr_img = hr_img.resize((max(1, w // sc), max(1, h // sc)), _Image.BICUBIC)
+            lr_t = torch.from_numpy(np.array(lr_img)).permute(2, 0, 1).float() / 255.0
+            lr_t = lr_t.unsqueeze(0).to(device)
+            with torch.no_grad():
+                sr_t = upscale_tensor_tiled(model, lr_t, scale=sc, tile_size=int(conf["infer"].get("tile_size", 256)), tile_overlap=int(conf["infer"].get("tile_overlap", 16)), device=device)
+            hr_t = torch.from_numpy(np.array(hr_img)).permute(2, 0, 1).float() / 255.0
+            hr_t = hr_t.unsqueeze(0).to(device)
+            final_psnr = psnr(sr_t, hr_t).item()
+            final_ssim = ssim(sr_t, hr_t).item()
+        else:
+            final_psnr = 0.0
+            final_ssim = 0.0
+        final_quality = quality_score(final_psnr, final_ssim)
+        # Make a very simple bar chart: PSNR, SSIM, Quality
+        names = ["PSNR(dB)", "SSIM", "Qualité"]
+        vals = [final_psnr, final_ssim, final_quality]
+        plt.figure(figsize=(6, 4))
+        bars = plt.bar(names, vals, color=["#4e79a7", "#59a14f", "#f28e2b"])
+        for b, v in zip(bars, vals):
+            plt.text(b.get_x() + b.get_width() / 2.0, v, f"{v:.2f}", ha="center", va="bottom", fontsize=10)
+        plt.ylim(0, max(40.0, max(vals) * 1.2))
+        plt.title("Performance finale (approx.)")
+        plt.tight_layout()
+        plt.savefig(perf_png)
+        print(f"[GRAPH] Enregistré: {perf_png}")
+    except Exception as e:
+        print(f"[GRAPH] Impossible de générer le graph de performance: {e}")
 
 
 if __name__ == "__main__":

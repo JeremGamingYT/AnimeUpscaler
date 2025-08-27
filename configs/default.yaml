@@ -7,9 +7,9 @@ patch_size: 192
 batch_size: 6
 num_workers: 4
 accumulation_steps: 1
-max_steps: 800
+max_steps: 1000
 val_interval: 500
-save_interval: 1000
+save_interval: 1200
 
 optimizer:
   lr: 2.0e-4
@@ -18,16 +18,20 @@ optimizer:
 
 scheduler:
   type: cosine
-  warmup_steps: 500
+  warmup_steps: 1000
 
 loss:
   charbonnier_weight: 1.0
-  edge_weight: 0.2
-  perceptual_weight: 0.1
+  edge_weight: 0.25
+  perceptual_weight: 0.05
   antibanding_weight: 0.1
   antibanding_grad_thr: 0.02
+  chroma_tv_weight: 0.05
+  antihalo_weight: 0.02
+  antihalo_edge_thr: 0.05
+  antihalo_blur: 5
   use_gan: true
-  gan_weight: 0.01
+  gan_weight: 0.005
   r1_gamma: 10.0
   gan_warmup_steps: 500
 

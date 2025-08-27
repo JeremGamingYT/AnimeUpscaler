@@ -12,6 +12,12 @@
   <br/>
 </p>
 
+<p align="center">
+  <img src="runs/samples/training_performance.png" alt="LAESR Results" width="800"/>
+  <em>Training performances:</em>
+  <br/>
+</p>
+
 ## 🎯 Overview
 
 LAESR (Line-Aware Edge and Spectrum Super-Resolution) is a specialized deep learning model designed specifically for anime and cartoon upscaling. Unlike generic super-resolution models, LAESR preserves the unique characteristics of anime art:

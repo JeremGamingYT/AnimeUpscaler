@@ -37,3 +37,65 @@ class AntiBandingLoss(nn.Module):
         return loss
 
 
+
+class ChromaTVLoss(nn.Module):
+    """Total variation on chroma channels only (Cb/Cr) to keep color flats clean.
+
+    Operates in YCbCr space; encourages smooth chroma while leaving luma edges.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    @staticmethod
+    def _rgb_to_ycbcr(x: torch.Tensor) -> torch.Tensor:
+        # x in [0,1]
+        r, g, b = x[:, 0:1], x[:, 1:2], x[:, 2:3]
+        y  = 0.299 * r + 0.587 * g + 0.114 * b
+        cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 0.5
+        cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 0.5
+        return torch.cat([y, cb, cr], dim=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        ycbcr = self._rgb_to_ycbcr(x)
+        chroma = ycbcr[:, 1:3]
+        dx = chroma[:, :, :, 1:] - chroma[:, :, :, :-1]
+        dy = chroma[:, :, 1:, :] - chroma[:, :, :-1, :]
+        loss = dx.abs().mean() + dy.abs().mean()
+        return loss
+
+
+class AntiHaloLoss(nn.Module):
+    """Penalize overshoot (ringing/halo) around strong edges.
+
+    Heuristic: compute luma detail via unsharp mask; penalize detail magnitude
+    only in regions with strong gradients (edge mask). Keep weight small.
+    """
+
+    def __init__(self, edge_threshold: float = 0.05, blur_kernel: int = 5):
+        super().__init__()
+        k = torch.tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]], dtype=torch.float32)
+        self.register_buffer("sobelx", k.view(1, 1, 3, 3))
+        self.register_buffer("sobely", k.t().contiguous().view(1, 1, 3, 3))
+        self.edge_threshold = edge_threshold
+        self.blur_kernel = max(1, int(blur_kernel))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Luma for edge detection
+        luma = 0.299 * x[:, :1] + 0.587 * x[:, 1:2] + 0.114 * x[:, 2:3]
+        gx = F.conv2d(luma, self.sobelx.to(device=luma.device, dtype=luma.dtype), padding=1)
+        gy = F.conv2d(luma, self.sobely.to(device=luma.device, dtype=luma.dtype), padding=1)
+        grad_mag = torch.sqrt(gx * gx + gy * gy + 1e-8)
+        edge_mask = (grad_mag > self.edge_threshold).float()
+
+        # Unsharp detail: x - blur(x)
+        k = self.blur_kernel
+        if k > 1:
+            pad = (k // 2, k // 2, k // 2, k // 2)
+            lpad = F.pad(luma, (pad[0], pad[1], pad[2], pad[3]), mode="reflect")
+            blur = F.avg_pool2d(lpad, kernel_size=k, stride=1)
+        else:
+            blur = luma
+        detail = luma - blur
+        loss = (detail.abs() * edge_mask).mean()
+        return loss
