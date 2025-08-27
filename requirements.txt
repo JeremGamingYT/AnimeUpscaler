@@ -1,0 +1,13 @@
+numpy>=1.26.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+PyYAML>=6.0.1
+scipy>=1.11.0
+tqdm>=4.66.0
+einops>=0.7.0
+rich>=13.6.0
+tensorboard>=2.14.0
+requests>=2.31.0
+lpips>=0.1.4
+# You must install torch/torchvision separately for your CUDA version on Windows.
+

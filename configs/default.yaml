@@ -1,0 +1,63 @@
+experiment_name: laesr_default
+seed: 42
+device: cuda
+
+scale: 4
+patch_size: 192
+batch_size: 6
+num_workers: 4
+accumulation_steps: 1
+max_steps: 1000
+val_interval: 500
+save_interval: 1000
+
+optimizer:
+  lr: 2.0e-4
+  betas: [0.9, 0.99]
+  weight_decay: 0.0
+
+scheduler:
+  type: cosine
+  warmup_steps: 500
+
+loss:
+  charbonnier_weight: 1.0
+  edge_weight: 0.2
+  perceptual_weight: 0.1
+  use_gan: true
+  gan_weight: 0.01
+  r1_gamma: 10.0
+  gan_warmup_steps: 1500
+
+data:
+  hr_dir: data/commons/images
+  commons_dir: data/commons
+  crop_size: 192
+  scale_choices: [4]
+  jpeg_q_range: [60, 95]
+  noise_sigma_range: [0.0, 4.0]
+  blur_kernel_size: 7
+  blur_sigma_range: [0.2, 2.0]
+
+train:
+  mixed_precision: true
+  ema: true
+  ema_decay: 0.999
+  grad_clip: 1.0
+  compile: true
+
+infer:
+  tile_size: 256
+  tile_overlap: 16
+  temporal_smoothing: false
+  smoothing_alpha: 0.7
+  half_precision: true
+  autotile: true
+  min_tile: 128
+
+paths:
+  runs_dir: runs
+  checkpoints_dir: runs/checkpoints
+  logs_dir: runs/logs
+  samples_dir: runs/samples
+
