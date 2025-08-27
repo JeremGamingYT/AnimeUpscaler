@@ -7,6 +7,7 @@ from typing import Dict, Any
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -43,6 +44,22 @@ def quality_score(psnr_val: float, ssim_val: float) -> float:
     # Normalize PSNR roughly to [0,1] for 20–40 dB range
     psnr_n = max(0.0, min(1.0, (psnr_val - 20.0) / 20.0))
     return 0.5 * (psnr_n + float(ssim_val))
+
+
+def rgb_to_ycbcr(x: torch.Tensor) -> torch.Tensor:
+    r, g, b = x[:, 0:1], x[:, 1:2], x[:, 2:3]
+    y  = 0.299 * r + 0.587 * g + 0.114 * b
+    cb = -0.168736 * r - 0.331264 * g + 0.5 * b + 0.5
+    cr = 0.5 * r - 0.418688 * g - 0.081312 * b + 0.5
+    return torch.cat([y, cb, cr], dim=1)
+
+
+def chroma_preservation_loss(sr: torch.Tensor, base_up: torch.Tensor) -> torch.Tensor:
+    ycbcr_sr = rgb_to_ycbcr(sr)
+    ycbcr_base = rgb_to_ycbcr(base_up)
+    cb_sr, cr_sr = ycbcr_sr[:, 1:2], ycbcr_sr[:, 2:3]
+    cb_b, cr_b = ycbcr_base[:, 1:2], ycbcr_base[:, 2:3]
+    return (cb_sr - cb_b).abs().mean() + (cr_sr - cr_b).abs().mean()
 
 
 def main(cfg: TrainConfig | None = None) -> None:
@@ -202,7 +219,11 @@ def main(cfg: TrainConfig | None = None) -> None:
                 ab_loss = antiband(sr) * float(conf["loss"].get("antibanding_weight", 0.0))
                 ctv_loss = chroma_tv(sr) * float(conf["loss"].get("chroma_tv_weight", 0.0))
                 ah_loss = anti_halo(sr) * float(conf["loss"].get("antihalo_weight", 0.0))
-                loss = base + e_loss + p_loss + ab_loss + ctv_loss + ah_loss
+                # Bicubic baseline upsample for reference chroma
+                with torch.no_grad():
+                    base_up = F.interpolate(lr, scale_factor=int(conf["scale"]), mode="bicubic", align_corners=False)
+                chroma_keep = chroma_preservation_loss(sr, base_up) * float(conf["loss"].get("chroma_keep_weight", 0.0))
+                loss = base + e_loss + p_loss + ab_loss + ctv_loss + ah_loss + chroma_keep
 
             if use_gan and step >= conf["loss"].get("gan_warmup_steps", 0):
                 # Discriminator update (R1 regularization)
@@ -249,9 +270,15 @@ def main(cfg: TrainConfig | None = None) -> None:
                 with torch.no_grad():
                     p = psnr(sr.detach(), hr)
                     s = ssim(sr.detach(), hr)
+                    # Baseline bicubic metrics for reference
+                    base_up_m = F.interpolate(lr.detach(), scale_factor=int(conf["scale"]), mode="bicubic", align_corners=False)
+                    pb = psnr(base_up_m, hr)
+                    sb = ssim(base_up_m, hr)
                 writer.add_scalar("loss/train", loss.item(), step)
                 writer.add_scalar("metrics/psnr", p.item(), step)
                 writer.add_scalar("metrics/ssim", s.item(), step)
+                writer.add_scalar("metrics_bicubic/psnr", pb.item(), step)
+                writer.add_scalar("metrics_bicubic/ssim", sb.item(), step)
                 perf_steps.append(step)
                 perf_psnr_list.append(float(p.item()))
                 perf_ssim_list.append(float(s.item()))
