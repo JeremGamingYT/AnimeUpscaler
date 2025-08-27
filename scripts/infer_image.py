@@ -9,7 +9,7 @@ from rich.console import Console
 
 from anime_upscaler.models.laesr import LAESR
 from anime_upscaler.utils.ckpt import find_latest_checkpoint, load_model_from_checkpoint
-from anime_upscaler.utils.tiling import upscale_tensor_tiled
+from anime_upscaler.utils.tiling import upscale_tensor_tiled, edge_aware_sharpen, upscale_tensor_tiled_tta
 
 
 console = Console()
@@ -62,7 +62,20 @@ def main() -> None:
             if use_half:
                 model.half()
                 lr = lr.half()
-            sr = upscale_tensor_tiled(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
+            use_tta = bool(conf["infer"].get("tta", False))
+            if use_tta:
+                sr = upscale_tensor_tiled_tta(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
+            else:
+                sr = upscale_tensor_tiled(model, lr, scale=scale, tile_size=tile, tile_overlap=overlap, device=device)
+            # Optional sharpening
+            ps = conf["infer"].get("post_sharpen", {})
+            if ps.get("enabled", False):
+                sr = edge_aware_sharpen(
+                    sr,
+                    amount=float(ps.get("amount", 0.3)),
+                    radius=int(ps.get("radius", 3)),
+                    threshold=float(ps.get("threshold", 0.0)),
+                )
         sr = (sr.clamp(0, 1) * 255.0).byte().squeeze(0).permute(1, 2, 0).cpu().numpy()
         out_path = os.path.join(out_dir, os.path.splitext(os.path.basename(p))[0] + f"_x{scale}.png")
         Image.fromarray(sr).save(out_path)

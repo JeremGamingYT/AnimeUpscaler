@@ -106,3 +106,66 @@ class AnimeSRDataset(Dataset):
         return {"lr": lr_t, "hr": hr_t, "scale": scale}
 
 
+class AnimeSRTileDataset(Dataset):
+    """Dataset that iterates deterministically over all non-overlapping HR tiles.
+
+    Generates LR/HR pairs by cropping the HR image into tiles of size crop_size,
+    then downscaling each tile by a random scale from scale_choices.
+    """
+
+    def __init__(self, hr_dir: str, scale_choices=(2, 3, 4), crop_size=192, tile_stride: int | None = None,
+                 jpeg_q_range=(60, 95), noise_sigma_range=(0.0, 4.0), blur_kernel=7, blur_sigma_range=(0.2, 2.0)):
+        super().__init__()
+        self.hr_paths = list_images(hr_dir)
+        if len(self.hr_paths) == 0:
+            raise RuntimeError(f"No images found in {hr_dir}.")
+        self.scale_choices = scale_choices
+        self.crop_size = crop_size
+        self.tile_stride = tile_stride or crop_size
+        self.jpeg_q_range = jpeg_q_range
+        self.noise_sigma_range = noise_sigma_range
+        self.blur_kernel = blur_kernel
+        self.blur_sigma_range = blur_sigma_range
+
+        # Precompute tile index: (img_idx, x, y)
+        self.index: List[Tuple[int, int, int]] = []
+        for idx, p in enumerate(self.hr_paths):
+            try:
+                with Image.open(p) as im:
+                    w, h = im.size
+            except Exception:
+                continue
+            sx = self.tile_stride
+            sy = self.tile_stride
+            max_x = max(0, w - crop_size)
+            max_y = max(0, h - crop_size)
+            x_positions = list(range(0, max_x + 1, sx))
+            y_positions = list(range(0, max_y + 1, sy))
+            # Ensure last tile reaches the border
+            if x_positions[-1] != max_x:
+                x_positions.append(max_x)
+            if y_positions[-1] != max_y:
+                y_positions.append(max_y)
+            for y in y_positions:
+                for x in x_positions:
+                    self.index.append((idx, x, y))
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def __getitem__(self, i: int):
+        img_idx, x, y = self.index[i]
+        hr = Image.open(self.hr_paths[img_idx]).convert("RGB")
+        crop_size = self.crop_size
+        # Safe-guard in case of boundary issues
+        x = min(max(0, x), max(0, hr.size[0] - crop_size))
+        y = min(max(0, y), max(0, hr.size[1] - crop_size))
+        hr_patch = hr.crop((x, y, x + crop_size, y + crop_size))
+        scale = random.choice(self.scale_choices)
+        lr_patch = hr_patch.resize((crop_size // scale, crop_size // scale), Image.BICUBIC)
+        lr_patch = degrade(lr_patch, self.jpeg_q_range, self.noise_sigma_range, self.blur_kernel, self.blur_sigma_range)
+
+        lr_t = torch.from_numpy(np.array(lr_patch)).permute(2, 0, 1).float() / 255.0
+        hr_t = torch.from_numpy(np.array(hr_patch)).permute(2, 0, 1).float() / 255.0
+        return {"lr": lr_t, "hr": hr_t, "scale": scale, "tile_xy": (x, y), "img_idx": img_idx}
+

@@ -61,3 +61,66 @@ def upscale_tensor_tiled(model: torch.nn.Module, lr: torch.Tensor, scale: int, t
     return out
 
 
+@torch.no_grad()
+def edge_aware_sharpen(x: torch.Tensor, amount: float = 0.3, radius: int = 1, threshold: float = 0.0) -> torch.Tensor:
+    """Simple edge-aware sharpening in tensor space.
+
+    Unsharp mask variant: x + amount * (x - blur(x)), with edge thresholding.
+    """
+    if amount <= 1e-6:
+        return x
+    # Gaussian approx by box blur (fast) using avgpool
+    k = max(1, int(radius))
+    if k > 1:
+        pad = (k // 2, k // 2, k // 2, k // 2)
+        x_pad = F.pad(x, (pad[0], pad[1], pad[2], pad[3]), mode="reflect")
+        blur = F.avg_pool2d(x_pad, kernel_size=k, stride=1)
+    else:
+        blur = x
+    mask = x - blur
+    if threshold > 0:
+        m = (mask.abs() > threshold).float()
+        mask = mask * m
+    y = (x + amount * mask).clamp(0, 1)
+    return y
+
+
+@torch.no_grad()
+def upscale_tensor_tiled_tta(model: torch.nn.Module, lr: torch.Tensor, scale: int, tile_size: int, tile_overlap: int, device: torch.device) -> torch.Tensor:
+    """x8 Test-Time Augmentation (D4 group: rotations + flips) with tiled upscale.
+
+    Returns averaged output. Slower but can improve detail and reduce artifacts.
+    """
+    def t_identity(x: torch.Tensor) -> torch.Tensor:
+        return x
+
+    def t_hflip(x: torch.Tensor) -> torch.Tensor:
+        return torch.flip(x, dims=[-1])
+
+    def t_vflip(x: torch.Tensor) -> torch.Tensor:
+        return torch.flip(x, dims=[-2])
+
+    def t_transpose(x: torch.Tensor) -> torch.Tensor:
+        return x.transpose(-1, -2)
+
+    T = [
+        (t_identity, t_identity),
+        (t_hflip, t_hflip),
+        (t_vflip, t_vflip),
+        (lambda x: t_hflip(t_vflip(x)), lambda y: t_hflip(t_vflip(y))),
+        (t_transpose, t_transpose),
+        (lambda x: t_hflip(t_transpose(x)), lambda y: t_transpose(t_hflip(y))),
+        (lambda x: t_vflip(t_transpose(x)), lambda y: t_transpose(t_vflip(y))),
+        (lambda x: t_hflip(t_vflip(t_transpose(x))), lambda y: t_transpose(t_vflip(t_hflip(y)))),
+    ]
+
+    acc = None
+    for fwd, inv in T:
+        lr_t = fwd(lr)
+        sr_t = upscale_tensor_tiled(model, lr_t, scale=scale, tile_size=tile_size, tile_overlap=tile_overlap, device=device)
+        sr_t = inv(sr_t)
+        acc = sr_t if acc is None else acc + sr_t
+    out = acc / float(len(T))
+    return out
+
+

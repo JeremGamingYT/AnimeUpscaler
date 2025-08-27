@@ -9,5 +9,6 @@ rich>=13.6.0
 tensorboard>=2.14.0
 requests>=2.31.0
 lpips>=0.1.4
+torchvision>=0.16.0
 # You must install torch/torchvision separately for your CUDA version on Windows.
 

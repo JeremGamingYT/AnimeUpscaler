@@ -1,9 +1,15 @@
 # LAESR - Line-Aware Edge and Spectrum Super-Resolution for Anime
 
 <p align="center">
-  <img src="runs/samples/sample_last.png" alt="LAESR Results" width="800"/>
+  <img src="runs/samples/sample_full-v5.png" alt="LAESR Results" width="800"/>
   <br/>
-  <em>Example upscaling results: Original (left) → LAESR 4x (right)</em>
+  <em>Example upscaling result (V3): Original (left) → LAESR 4x (right)</em>
+</p>
+
+<p align="center">
+  <img src="runs/samples/sample_full_last.png" alt="LAESR Results" width="800"/>
+  <em>Latest update (V7):</em>
+  <br/>
 </p>
 
 ## 🎯 Overview

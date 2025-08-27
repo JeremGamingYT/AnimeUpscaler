@@ -7,7 +7,7 @@ patch_size: 192
 batch_size: 6
 num_workers: 4
 accumulation_steps: 1
-max_steps: 1000
+max_steps: 800
 val_interval: 500
 save_interval: 1000
 
@@ -24,15 +24,19 @@ loss:
   charbonnier_weight: 1.0
   edge_weight: 0.2
   perceptual_weight: 0.1
+  antibanding_weight: 0.1
+  antibanding_grad_thr: 0.02
   use_gan: true
   gan_weight: 0.01
   r1_gamma: 10.0
-  gan_warmup_steps: 1500
+  gan_warmup_steps: 500
 
 data:
   hr_dir: data/commons/images
   commons_dir: data/commons
   crop_size: 192
+  use_tile_dataset: true
+  tile_stride: 192
   scale_choices: [4]
   jpeg_q_range: [60, 95]
   noise_sigma_range: [0.0, 4.0]
@@ -54,6 +58,12 @@ infer:
   half_precision: true
   autotile: true
   min_tile: 128
+  post_sharpen:
+    enabled: true
+    amount: 0.35
+    radius: 3
+    threshold: 0.01
+  tta: false
 
 paths:
   runs_dir: runs

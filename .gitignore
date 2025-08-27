@@ -1,3 +1,13 @@
+# Ignore all files in the runs directory (but not the samples directory)
+runs/checkpoints/
+runs/logs/
+
+# Ignore all files in the data directory
+data/
+
+# Ignore all files in the models directory
+models/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
