@@ -10,9 +10,9 @@ model:
   num_blocks: 18
 num_workers: 8
 accumulation_steps: 3
-max_steps: 120000
-val_interval: 2000
-save_interval: 10000
+max_steps: 30000
+val_interval: 1000
+save_interval: 2000
 
 optimizer:
   lr: 2.0e-4
@@ -21,24 +21,24 @@ optimizer:
 
 scheduler:
   type: cosine
-  warmup_steps: 4000
+  warmup_steps: 800
 
 loss:
   charbonnier_weight: 1.0
-  edge_weight: 0.35
-  perceptual_weight: 0.02
-  antibanding_weight: 0.08
+  edge_weight: 0.40
+  perceptual_weight: 0.06
+  antibanding_weight: 0.10
   antibanding_grad_thr: 0.02
-  chroma_tv_weight: 0.03
-  chroma_keep_weight: 0.15
+  chroma_tv_weight: 0.04
+  chroma_keep_weight: 0.20
   antihalo_weight: 0.03
   antihalo_edge_thr: 0.05
   antihalo_blur: 5
-  tv_weight: 0.01
+  tv_weight: 0.005
   use_gan: true
-  gan_weight: 0.0015
+  gan_weight: 0.003
   r1_gamma: 10.0
-  gan_warmup_steps: 30000
+  gan_warmup_steps: 2000
 
 data:
   hr_dir: data/commons/images
@@ -67,12 +67,25 @@ infer:
   half_precision: true
   autotile: true
   min_tile: 128
+  preserve_chroma: true
   post_sharpen:
     enabled: true
-    amount: 0.30
-    radius: 2
-    threshold: 0.01
-  tta: false
+    amount: 0.45
+    radius: 1
+    threshold: 0.02
+  tta: true
+  self_finetune:
+    enabled: true
+    steps: 400
+    in_patch: 128
+    lr: 1.0e-4
+    edge_weight: 0.4
+    tv_weight: 0.0
+    adapt_edges: true
+    adapt_spectrum: false
+    lpips_weight: 0.3
+    edge_focus: true
+    edge_focus_ratio: 0.7
 
 paths:
   runs_dir: runs
