@@ -3,13 +3,16 @@ seed: 42
 device: cuda
 
 scale: 4
-patch_size: 192
-batch_size: 6
-num_workers: 4
-accumulation_steps: 1
-max_steps: 2000
-val_interval: 500
-save_interval: 1200
+patch_size: 256
+batch_size: 12
+model:
+  base_channels: 80
+  num_blocks: 18
+num_workers: 8
+accumulation_steps: 3
+max_steps: 120000
+val_interval: 2000
+save_interval: 10000
 
 optimizer:
   lr: 2.0e-4
@@ -18,46 +21,46 @@ optimizer:
 
 scheduler:
   type: cosine
-  warmup_steps: 1000
+  warmup_steps: 4000
 
 loss:
   charbonnier_weight: 1.0
-  edge_weight: 0.3
-  perceptual_weight: 0.0
-  antibanding_weight: 0.02
+  edge_weight: 0.35
+  perceptual_weight: 0.02
+  antibanding_weight: 0.08
   antibanding_grad_thr: 0.02
-  chroma_tv_weight: 0.01
-  chroma_keep_weight: 0.1
-  antihalo_weight: 0.0
+  chroma_tv_weight: 0.03
+  chroma_keep_weight: 0.15
+  antihalo_weight: 0.03
   antihalo_edge_thr: 0.05
   antihalo_blur: 5
-  use_gan: false
-  gan_weight: 0.0
-  r1_gamma: 0.0
-  gan_warmup_steps: 0
+  use_gan: true
+  gan_weight: 0.0015
+  r1_gamma: 10.0
+  gan_warmup_steps: 30000
 
 data:
   hr_dir: data/commons/images
   commons_dir: data/commons
-  crop_size: 192
+  crop_size: 256
   use_tile_dataset: true
-  tile_stride: 192
+  tile_stride: 256
   scale_choices: [4]
-  jpeg_q_range: [80, 95]
-  noise_sigma_range: [0.0, 2.0]
-  blur_kernel_size: 5
-  blur_sigma_range: [0.2, 1.2]
+  jpeg_q_range: [70, 95]
+  noise_sigma_range: [0.0, 3.0]
+  blur_kernel_size: 7
+  blur_sigma_range: [0.2, 1.8]
 
 train:
   mixed_precision: true
   ema: true
   ema_decay: 0.999
   grad_clip: 1.0
-  compile: true
+  compile: false
 
 infer:
-  tile_size: 256
-  tile_overlap: 16
+  tile_size: 384
+  tile_overlap: 32
   temporal_smoothing: false
   smoothing_alpha: 0.7
   half_precision: true
@@ -65,8 +68,8 @@ infer:
   min_tile: 128
   post_sharpen:
     enabled: true
-    amount: 0.35
-    radius: 3
+    amount: 0.30
+    radius: 2
     threshold: 0.01
   tta: false
 
@@ -75,4 +78,3 @@ paths:
   checkpoints_dir: runs/checkpoints
   logs_dir: runs/logs
   samples_dir: runs/samples
-

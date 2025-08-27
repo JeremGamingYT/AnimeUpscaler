@@ -8,13 +8,13 @@
 
 <p align="center">
   <img src="runs/samples/sample_full_v9.png" alt="LAESR Results" width="800"/>
-  <em>Latest update (V9):</em>
+  <em>Latest update (V9)</em>
   <br/>
 </p>
 
 <p align="center">
   <img src="runs/samples/training_performance.png" alt="LAESR Results" width="800"/>
-  <em>Training performances:</em>
+  <em>Training performances</em>
   <br/>
 </p>
 

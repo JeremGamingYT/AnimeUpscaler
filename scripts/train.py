@@ -79,7 +79,13 @@ def main(cfg: TrainConfig | None = None) -> None:
     os.makedirs(logs_dir, exist_ok=True)
     os.makedirs(samples_dir, exist_ok=True)
 
-    model = LAESR(scale=conf["scale"]).to(device)
+    # Model capacity from config
+    model_cfg = conf.get("model", {})
+    model = LAESR(
+        scale=conf["scale"],
+        base_channels=int(model_cfg.get("base_channels", 64)),
+        num_blocks=int(model_cfg.get("num_blocks", 12)),
+    ).to(device)
     # Safe compile: skip if Triton is unavailable to avoid runtime TritonMissing
     want_compile = bool(conf["train"].get("compile", False))
     if want_compile:

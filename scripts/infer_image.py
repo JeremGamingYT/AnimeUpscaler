@@ -42,7 +42,12 @@ def main() -> None:
         console.print("[red]Aucune image trouvée.[/red]")
         return
 
-    model = LAESR(scale=conf["scale"]).to(device).eval()
+    mcfg = conf.get("model", {})
+    model = LAESR(
+        scale=conf["scale"],
+        base_channels=int(mcfg.get("base_channels", 64)),
+        num_blocks=int(mcfg.get("num_blocks", 12)),
+    ).to(device).eval()
     latest = find_latest_checkpoint(conf["paths"]["checkpoints_dir"]) 
     if latest:
         load_model_from_checkpoint(model, latest, device)
